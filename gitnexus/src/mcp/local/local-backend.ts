@@ -4797,8 +4797,7 @@ export class LocalBackend {
               degraded.reason =
                 `Semantic search is unavailable (the vector index could not be used, and ${embeddingCount} ` +
                 `embeddings exceed the exact-scan limit of ${exactLimit}). Raise ` +
-                'GITNEXUS_SEMANTIC_EXACT_SCAN_LIMIT to allow the slower exact scan; graph and keyword ' +
-                'search remain available.';
+                'GITNEXUS_SEMANTIC_EXACT_SCAN_LIMIT to allow the slower exact scan.';
             }
             return [];
           }

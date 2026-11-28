@@ -128,6 +128,52 @@ describe('FTS opt-out analysis lifecycle (#3091)', () => {
     }
   }, 180_000);
 
+  it('reports both search lanes as unavailable when FTS is disabled and the vector fallback is capped', async () => {
+    await runFullAnalysis(repo.dbPath, { ...options, skipFts: true }, callbacks);
+    const { lbugPath } = getStoragePaths(repo.dbPath);
+    const embedding = Array.from({ length: EMBEDDING_DIMS }, (_, i) => (i === 0 ? 1 : 0));
+    await adapter.initLbug(lbugPath, { skipFts: true });
+    try {
+      const [node] = await adapter.executeQuery(
+        "MATCH (n:Function {name: 'createHandler'}) RETURN n.id AS id",
+      );
+      await batchInsertEmbeddings(
+        adapter.executeWithReusedStatement,
+        [0, 1].map((chunkIndex) => ({
+          nodeId: String(node.id),
+          chunkIndex,
+          startLine: 13,
+          endLine: 15,
+          embedding,
+        })),
+      );
+      await adapter.flushWAL();
+    } finally {
+      await adapter.closeLbug();
+    }
+
+    // The legacy rows have no vector index. Bypass model inference only.
+    const embedder = await import('../../src/mcp/core/embedder.js');
+    vi.spyOn(embedder, 'embedQuery').mockResolvedValue(embedding);
+    vi.stubEnv('GITNEXUS_SEMANTIC_EXACT_SCAN_LIMIT', '1');
+    const backend = new LocalBackend();
+    try {
+      expect(await backend.init()).toBe(true);
+      const query = await backend.callTool('query', {
+        repo: options.registryName,
+        search_query: 'createHandler',
+      });
+      expect(query.error).toBeUndefined();
+      expect(query.warning).toContain('FTS disabled for this index');
+      expect(query.warning).toContain('Semantic search is unavailable');
+      expect(query.warning).toContain('2 embeddings exceed the exact-scan limit of 1');
+      expect(query.warning).toContain('GITNEXUS_SEMANTIC_EXACT_SCAN_LIMIT');
+      expect(query.warning).not.toMatch(/keyword search remains? available/);
+    } finally {
+      await backend.dispose();
+    }
+  }, 180_000);
+
   it('re-enables at the same commit and safely disables existing native indexes while preserving graph and embeddings', async () => {
     vi.stubEnv('GITNEXUS_SKIP_FTS', '1');
     const disabled = await runFullAnalysis(repo.dbPath, options, callbacks);
